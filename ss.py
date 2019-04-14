@@ -1,6 +1,7 @@
 import mss
 import math
 import numpy
+import serial
 
 kLedCount = 37
 
@@ -21,16 +22,16 @@ class ScreenshotDataCollector:
     self.groupColorDict = dict()
     for i in range(0,kLedCount):
       self.groupColorDict[i] = dict()
+      self.groupColorDict[i]["blueSum"] = 0
       self.groupColorDict[i]["greenSum"] = 0
       self.groupColorDict[i]["redSum"] = 0
-      self.groupColorDict[i]["blueSum"] = 0
       self.groupColorDict[i]["count"] = 0
 
     for i in range(0, len(data), 4):
       groupIndex = translateIndex(i/4, kScreenWidth)
-      self.groupColorDict[groupIndex]["greenSum"] += data[i]
-      self.groupColorDict[groupIndex]["redSum"] += data[i+1]
-      self.groupColorDict[groupIndex]["blueSum"] += data[i+2]
+      self.groupColorDict[groupIndex]["blueSum"] += int.from_bytes(data[i], byteorder='little')
+      self.groupColorDict[groupIndex]["greenSum"] += int.from_bytes(data[i+1], byteorder='little')
+      self.groupColorDict[groupIndex]["redSum"] += int.from_bytes(data[i+2], byteorder='little')
       self.groupColorDict[groupIndex]["count"] += 1
   
   def getAverages(self):
@@ -53,26 +54,52 @@ def translateIndex(index, kScreenWidth):
     #This lands in a group of size groupWidthFloor
     return int((kPixelColumn-remainder)/groupWidthFloor)
 
-with mss.mss() as sct:
-  # Get information of monitor 2
-  monitor_number = 1
-  mon = sct.monitors[monitor_number]
-  kHeight = int(round(mon["width"]/float(kLedCount)))
-  print("Square: {}x{}".format(kHeight,kHeight))
+def serializePixelsForArduino(pixelList):
+  #  [Pixel] pixelList
+  # <pixelCount:n>:r_1,g_1,b_1,...,r_n,g_n,b_n
+  pixelString = str(len(pixelList)) + ','
+  for pixel in pixelList:
+    pixelString += str(pixel.red) + ','
+    pixelString += str(pixel.green) + ','
+    pixelString += str(pixel.blue) + ','
+  return pixelString
 
-  # The screen part to capture
-  monitor = {
-    "top": mon["top"],
-    "left": mon["left"],
-    "width": mon["width"],
-    "height": kHeight,
-    "mon": monitor_number,
-  }
-  for i in range(0,100):
-    sct.cls_image = ScreenshotDataCollector
-    ssData = sct.grab(monitor)
-    print("{}".format(ssData.getAverages()))
-  # ...
+def toHtmlFile(pixels):
+  with open("colors.html", 'w') as htmlFile:
+    kBoxWidth = 50
+    htmlStr = '<!DOCTYPE html>'
+    htmlStr += '<html>'
+    htmlStr += '<body>'
+    for pixel in pixels:
+      htmlStr += '<svg width="'+str(kBoxWidth)+'" height="'+str(kBoxWidth)+'"><rect width="'+str(kBoxWidth)+'" height="'+str(kBoxWidth)+'" style="fill:rgb('+str(pixel.red)+','+str(pixel.green)+','+str(pixel.blue)+')" /></svg>'
+    htmlStr += '</body>'
+    htmlStr += '</html>'
+    htmlFile.write(htmlStr)
+
+
+with serial.Serial('COM4',9600) as seiralConnection:
+  with mss.mss() as sct:
+    monitor_number = 2
+    mon = sct.monitors[monitor_number]
+    kHeight = int(round(mon["width"]/float(kLedCount)))
+    print("Square: {}x{}".format(kHeight,kHeight))
+
+    # The screen part to capture
+    monitor = {
+      "top": mon["top"],
+      "left": mon["left"],
+      "width": mon["width"],
+      "height": kHeight,
+      "mon": monitor_number,
+    }
+    while True:
+      sct.cls_image = ScreenshotDataCollector
+      ssData = sct.grab(monitor)
+      averages = ssData.getAverages()
+      # toHtmlFile(averages)
+      serialStr = serializePixelsForArduino(averages)
+      seiralConnection.write(serialStr.encode())
+    # ...
 
 
 # groupCount = 2
